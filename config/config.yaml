@@ -1,0 +1,54 @@
+server:
+  http_port: 8080
+  ws_port: 8081
+  metrics_port: 9090
+  read_timeout: 10s
+  write_timeout: 10s
+  idle_timeout: 120s
+  shutdown_timeout: 30s
+
+database:
+  host: localhost
+  port: 5432
+  name: trading
+  user: trader
+  password: devpass
+  max_connections: 25
+  max_idle_connections: 5
+  connection_max_lifetime: 5m
+  ssl_mode: disable
+
+redis:
+  host: localhost
+  port: 6379
+  password: ""
+  db: 0
+  stream_name: order_events
+  max_retries: 3
+  pool_size: 10
+
+engine:
+  instrument: BTC-USD
+  snapshot_interval: 60s
+  max_order_book_depth: 100
+  recovery_mode: snapshot  # snapshot or replay
+
+performance:
+  worker_pool_size: 10
+  order_buffer_size: 1000
+  batch_size: 100
+
+rate_limiting:
+  enabled: true
+  requests_per_second: 100
+  burst: 200
+
+logging:
+  level: info  # debug, info, warn, error
+  format: json # json or text
+  output: stdout
+
+metrics:
+  enabled: true
+  namespace: trading_engine
+  subsystem: orders

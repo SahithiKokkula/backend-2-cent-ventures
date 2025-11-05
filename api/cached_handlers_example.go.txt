@@ -1,0 +1,436 @@
+// Example: HTTP handlers with Redis caching integration
+// This file shows how to integrate caching into your HTTP API handlers
+
+package api
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"strconv"
+	"time"
+
+	"your-project/cache"
+)
+
+// CachedAPIServer wraps your API server with caching
+type CachedAPIServer struct {
+	// Your existing server fields
+	// matchingEngine *engine.MatchingEngine
+	// ...
+	
+	// Caching components
+	redisCache     *cache.RedisCache
+	orderbookCache *cache.OrderbookCache
+	tradesCache    *cache.TradesCache
+	pubsubManager  *cache.PubSubManager
+	invalidator    *cache.CacheInvalidator
+}
+
+// NewCachedAPIServer creates a new API server with caching enabled
+func NewCachedAPIServer() (*CachedAPIServer, error) {
+	// Initialize Redis connection
+	redisConfig := cache.DefaultRedisCacheConfig()
+	redisCache, err := cache.NewRedisCache(redisConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
+	}
+	
+	// Initialize orderbook cache
+	orderbookCache := cache.NewOrderbookCache(redisCache, nil)
+	
+	// Initialize trades cache
+	tradesCache := cache.NewTradesCache(redisCache, nil)
+	
+	// Initialize pub/sub manager
+	pubsubManager := cache.NewPubSubManager(redisCache, orderbookCache, tradesCache)
+	if err := pubsubManager.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start pub/sub manager: %w", err)
+	}
+	
+	// Create invalidator
+	invalidator := cache.NewCacheInvalidator(pubsubManager)
+	
+	server := &CachedAPIServer{
+		redisCache:     redisCache,
+		orderbookCache: orderbookCache,
+		tradesCache:    tradesCache,
+		pubsubManager:  pubsubManager,
+		invalidator:    invalidator,
+	}
+	
+	return server, nil
+}
+
+// HandleGetOrderbook handles GET /orderbook/:symbol with caching
+func (s *CachedAPIServer) HandleGetOrderbook(w http.ResponseWriter, r *http.Request) {
+	symbol := extractSymbol(r) // Extract from URL parameter
+	
+	// Try cache first
+	snapshot, err := s.orderbookCache.GetOrderbook(symbol)
+	if err == nil {
+		log.Printf("Cache HIT: orderbook for %s", symbol)
+		respondJSON(w, http.StatusOK, snapshot)
+		return
+	}
+	
+	log.Printf("Cache MISS: orderbook for %s", symbol)
+	
+	// Cache miss - fetch from matching engine
+	snapshot, err = s.fetchOrderbookFromEngine(symbol)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get orderbook: %v", err), http.StatusInternalServerError)
+		return
+	}
+	
+	// Cache the result with 5 second TTL
+	if err := s.orderbookCache.SetOrderbook(snapshot, 5*time.Second); err != nil {
+		log.Printf("Warning: failed to cache orderbook: %v", err)
+	}
+	
+	respondJSON(w, http.StatusOK, snapshot)
+}
+
+// HandleGetTopOfBook handles GET /orderbook/:symbol/top with caching
+func (s *CachedAPIServer) HandleGetTopOfBook(w http.ResponseWriter, r *http.Request) {
+	symbol := extractSymbol(r)
+	
+	// Try cache first
+	top, err := s.orderbookCache.GetTopOfBook(symbol)
+	if err == nil {
+		log.Printf("Cache HIT: top-of-book for %s", symbol)
+		respondJSON(w, http.StatusOK, top)
+		return
+	}
+	
+	log.Printf("Cache MISS: top-of-book for %s", symbol)
+	
+	// Cache miss - fetch and extract top
+	snapshot, err := s.fetchOrderbookFromEngine(symbol)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get orderbook: %v", err), http.StatusInternalServerError)
+		return
+	}
+	
+	top = cache.ExtractTopOfBook(snapshot)
+	
+	// Cache with shorter TTL (2 seconds)
+	if err := s.orderbookCache.SetTopOfBook(top, 2*time.Second); err != nil {
+		log.Printf("Warning: failed to cache top-of-book: %v", err)
+	}
+	
+	respondJSON(w, http.StatusOK, top)
+}
+
+// HandleGetTrades handles GET /trades/:symbol with caching
+func (s *CachedAPIServer) HandleGetTrades(w http.ResponseWriter, r *http.Request) {
+	symbol := extractSymbol(r)
+	
+	// Get limit from query parameter (default: 50)
+	limitStr := r.URL.Query().Get("limit")
+	limit := 50
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil {
+			limit = l
+		}
+	}
+	
+	// Try cache first
+	tradesList, err := s.tradesCache.GetTrades(symbol, limit)
+	if err == nil {
+		log.Printf("Cache HIT: trades for %s (limit %d)", symbol, limit)
+		respondJSON(w, http.StatusOK, tradesList)
+		return
+	}
+	
+	log.Printf("Cache MISS: trades for %s (limit %d)", symbol, limit)
+	
+	// Cache miss - fetch from database or matching engine
+	tradesList, err = s.fetchTradesFromDB(symbol, limit)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get trades: %v", err), http.StatusInternalServerError)
+		return
+	}
+	
+	// Cache with 10 second TTL
+	if err := s.tradesCache.SetTrades(tradesList, limit, 10*time.Second); err != nil {
+		log.Printf("Warning: failed to cache trades: %v", err)
+	}
+	
+	respondJSON(w, http.StatusOK, tradesList)
+}
+
+// HandlePostOrder handles POST /orders with cache invalidation
+func (s *CachedAPIServer) HandlePostOrder(w http.ResponseWriter, r *http.Request) {
+	// Parse order from request
+	var order struct {
+		Symbol   string `json:"symbol"`
+		Side     string `json:"side"`
+		Type     string `json:"type"`
+		Price    string `json:"price"`
+		Quantity string `json:"quantity"`
+	}
+	
+	if err := json.NewDecoder(r.Body).Decode(&order); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	
+	// Submit order to matching engine
+	// result, err := s.matchingEngine.ProcessOrder(...)
+	// if err != nil { ... }
+	
+	// Invalidate cache after order submission
+	// This notifies all subscribers via pub/sub
+	if err := s.invalidator.NotifyOrderbookUpdate(order.Symbol); err != nil {
+		log.Printf("Warning: failed to invalidate orderbook cache: %v", err)
+	}
+	
+	// Also invalidate trades cache (new trades might be generated)
+	if err := s.invalidator.NotifyNewTrade(order.Symbol); err != nil {
+		log.Printf("Warning: failed to invalidate trades cache: %v", err)
+	}
+	
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// HandleCancelOrder handles DELETE /orders/:id with cache invalidation
+func (s *CachedAPIServer) HandleCancelOrder(w http.ResponseWriter, r *http.Request) {
+	orderID := extractOrderID(r)
+	
+	// Cancel order in matching engine
+	// symbol, err := s.matchingEngine.CancelOrder(orderID)
+	// if err != nil { ... }
+	
+	symbol := "BTC-USD" // Get actual symbol from order
+	
+	// Invalidate cache after cancellation
+	if err := s.invalidator.NotifyOrderbookUpdate(symbol); err != nil {
+		log.Printf("Warning: failed to invalidate orderbook cache: %v", err)
+	}
+	
+	respondJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
+}
+
+// HandleCacheStats handles GET /cache/stats - shows cache statistics
+func (s *CachedAPIServer) HandleCacheStats(w http.ResponseWriter, r *http.Request) {
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		symbol = "BTC-USD" // Default symbol
+	}
+	
+	// Get orderbook cache stats
+	orderbookStats, err := s.orderbookCache.GetOrderbookStats(symbol)
+	if err != nil {
+		log.Printf("Failed to get orderbook stats: %v", err)
+	}
+	
+	// Get trades cache stats
+	tradesStats, err := s.tradesCache.GetTradesStats(symbol, []int{10, 50, 100})
+	if err != nil {
+		log.Printf("Failed to get trades stats: %v", err)
+	}
+	
+	// Get Redis connection stats
+	redisStats := s.redisCache.GetStats()
+	
+	stats := map[string]interface{}{
+		"symbol":         symbol,
+		"orderbook":      orderbookStats,
+		"trades":         tradesStats,
+		"redis":          redisStats,
+		"subscriptions":  s.pubsubManager.GetSubscribedChannels(),
+	}
+	
+	respondJSON(w, http.StatusOK, stats)
+}
+
+// HandleInvalidateCache handles POST /cache/invalidate - manual cache invalidation
+func (s *CachedAPIServer) HandleInvalidateCache(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Type   string `json:"type"`   // "orderbook", "trades", "all"
+		Symbol string `json:"symbol"` // Required for orderbook/trades
+	}
+	
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	
+	switch req.Type {
+	case "orderbook":
+		if req.Symbol == "" {
+			http.Error(w, "Symbol required for orderbook invalidation", http.StatusBadRequest)
+			return
+		}
+		if err := s.invalidator.InvalidateOrderbook(req.Symbol); err != nil {
+			http.Error(w, fmt.Sprintf("Failed to invalidate: %v", err), http.StatusInternalServerError)
+			return
+		}
+		
+	case "trades":
+		if req.Symbol == "" {
+			http.Error(w, "Symbol required for trades invalidation", http.StatusBadRequest)
+			return
+		}
+		if err := s.invalidator.InvalidateTrades(req.Symbol); err != nil {
+			http.Error(w, fmt.Sprintf("Failed to invalidate: %v", err), http.StatusInternalServerError)
+			return
+		}
+		
+	case "all":
+		if err := s.invalidator.InvalidateAll(); err != nil {
+			http.Error(w, fmt.Sprintf("Failed to invalidate: %v", err), http.StatusInternalServerError)
+			return
+		}
+		
+	default:
+		http.Error(w, "Invalid type. Use: orderbook, trades, or all", http.StatusBadRequest)
+		return
+	}
+	
+	respondJSON(w, http.StatusOK, map[string]string{
+		"status":  "ok",
+		"type":    req.Type,
+		"symbol":  req.Symbol,
+		"message": "Cache invalidated successfully",
+	})
+}
+
+// RegisterCachedRoutes registers all routes with caching
+func (s *CachedAPIServer) RegisterCachedRoutes(mux *http.ServeMux) {
+	// Cached read endpoints
+	mux.HandleFunc("/orderbook/", s.HandleGetOrderbook)
+	mux.HandleFunc("/orderbook/top/", s.HandleGetTopOfBook)
+	mux.HandleFunc("/trades/", s.HandleGetTrades)
+	
+	// Write endpoints with cache invalidation
+	mux.HandleFunc("/orders", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			s.HandlePostOrder(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	
+	mux.HandleFunc("/orders/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			s.HandleCancelOrder(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	
+	// Cache management endpoints
+	mux.HandleFunc("/cache/stats", s.HandleCacheStats)
+	mux.HandleFunc("/cache/invalidate", s.HandleInvalidateCache)
+}
+
+// Close cleanly shuts down caching components
+func (s *CachedAPIServer) Close() error {
+	log.Println("Shutting down caching components...")
+	
+	// Stop pub/sub manager
+	if err := s.pubsubManager.Stop(); err != nil {
+		log.Printf("Error stopping pub/sub manager: %v", err)
+	}
+	
+	// Close Redis connection
+	if err := s.redisCache.Close(); err != nil {
+		log.Printf("Error closing Redis connection: %v", err)
+	}
+	
+	return nil
+}
+
+// Helper functions
+
+func extractSymbol(r *http.Request) string {
+	// Extract symbol from URL path
+	// Example: /orderbook/BTC-USD -> BTC-USD
+	path := r.URL.Path
+	// Implement your path parsing logic
+	return "BTC-USD" // Placeholder
+}
+
+func extractOrderID(r *http.Request) string {
+	// Extract order ID from URL path
+	// Example: /orders/123e4567-e89b-12d3-a456-426614174000
+	return "123e4567-e89b-12d3-a456-426614174000" // Placeholder
+}
+
+func (s *CachedAPIServer) fetchOrderbookFromEngine(symbol string) (*cache.OrderbookSnapshot, error) {
+	// Fetch from your matching engine
+	// This is a placeholder - implement based on your engine
+	return &cache.OrderbookSnapshot{
+		Symbol: symbol,
+		Bids:   []cache.PriceLevel{},
+		Asks:   []cache.PriceLevel{},
+	}, nil
+}
+
+func (s *CachedAPIServer) fetchTradesFromDB(symbol string, limit int) (*cache.TradesList, error) {
+	// Fetch from your database
+	// This is a placeholder - implement based on your DB
+	return &cache.TradesList{
+		Symbol: symbol,
+		Trades: []cache.Trade{},
+		Count:  0,
+	}, nil
+}
+
+func respondJSON(w http.ResponseWriter, status int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(data)
+}
+
+// Example main.go integration:
+/*
+package main
+
+import (
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	
+	"your-project/api"
+)
+
+func main() {
+	// Create cached API server
+	server, err := api.NewCachedAPIServer()
+	if err != nil {
+		log.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Close()
+	
+	// Register routes
+	mux := http.NewServeMux()
+	server.RegisterCachedRoutes(mux)
+	
+	// Start HTTP server
+	httpServer := &http.Server{
+		Addr:    ":8080",
+		Handler: mux,
+	}
+	
+	go func() {
+		log.Println("Server starting on :8080")
+		if err := httpServer.ListenAndServe(); err != nil {
+			log.Fatalf("Server failed: %v", err)
+		}
+	}()
+	
+	// Wait for interrupt signal
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
+	
+	log.Println("Shutting down...")
+	httpServer.Close()
+}
+*/

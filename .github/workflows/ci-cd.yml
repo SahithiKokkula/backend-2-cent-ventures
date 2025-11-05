@@ -1,0 +1,510 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  GO_VERSION: '1.21'
+  DOCKER_IMAGE_NAME: trading-engine
+  REGISTRY: ghcr.io
+
+jobs:
+  # ============================================
+  # Job 1: Linting and Code Quality
+  # ============================================
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+    
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v3
+      with:
+        version: latest
+        args: --timeout=5m
+    
+    - name: Check Go formatting
+      run: |
+        if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+          echo "::error::Code is not formatted. Run 'go fmt ./...'"
+          gofmt -s -l .
+          exit 1
+        fi
+    
+    - name: Check Go mod tidy
+      run: |
+        go mod tidy
+        git diff --exit-code go.mod go.sum || {
+          echo "::error::go.mod or go.sum is not tidy. Run 'go mod tidy'"
+          exit 1
+        }
+
+  # ============================================
+  # Job 2: Unit Tests
+  # ============================================
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint  # Only run if linting passes
+    
+    # Service containers for unit tests that need DB/Redis
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: trading_test
+          POSTGRES_USER: trader
+          POSTGRES_PASSWORD: testpass
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache: true  # Built-in Go caching
+    
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+    
+    - name: Download dependencies
+      run: go mod download
+    
+    - name: Run unit tests
+      env:
+        DB_HOST: localhost
+        DB_PORT: 5432
+        DB_NAME: trading_test
+        DB_USER: trader
+        DB_PASSWORD: testpass
+        REDIS_HOST: localhost
+        REDIS_PORT: 6379
+      run: |
+        go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+    
+    - name: Check test coverage
+      run: |
+        COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+        echo "Test coverage: ${COVERAGE}%"
+        if (( $(echo "$COVERAGE < 50" | bc -l) )); then
+          echo "::warning::Test coverage is below 50% (${COVERAGE}%)"
+        fi
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.out
+        flags: unittests
+        fail_ci_if_error: false  # Don't fail if Codecov upload fails
+    
+    - name: Generate test report
+      if: always()
+      run: |
+        go install github.com/jstemmer/go-junit-report@latest
+        go test -v ./... 2>&1 | go-junit-report > report.xml
+    
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results
+        path: report.xml
+
+  # ============================================
+  # Job 3: Integration Tests with Service Containers
+  # ============================================
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests  # Run after unit tests pass
+    
+    # Service containers for integration tests (faster than docker-compose)
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: trading_test
+          POSTGRES_USER: trader
+          POSTGRES_PASSWORD: testpass
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache: true  # Built-in Go caching
+    
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+    
+    - name: Download dependencies
+      run: go mod download
+    
+    - name: Verify services are ready
+      run: |
+        echo "Waiting for Postgres..."
+        for i in {1..30}; do
+          pg_isready -h localhost -p 5432 && break
+          echo "Waiting for postgres... ($i/30)"
+          sleep 2
+        done
+        
+        echo "Waiting for Redis..."
+        for i in {1..30}; do
+          redis-cli -h localhost ping && break
+          echo "Waiting for redis... ($i/30)"
+          sleep 2
+        done
+        
+        echo "All services ready!"
+    
+    - name: Run integration tests
+      env:
+        DB_HOST: localhost
+        DB_PORT: 5432
+        DB_NAME: trading_test
+        DB_USER: trader
+        DB_PASSWORD: testpass
+        REDIS_HOST: localhost
+        REDIS_PORT: 6379
+      run: |
+        go test -v -tags=integration ./tests/integration/... -timeout 5m
+    
+    - name: Upload integration test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: integration-test-results
+        path: tests/integration/*.log
+        if-no-files-found: ignore
+
+  # ============================================
+  # Job 4: Build Docker Image
+  # ============================================
+  build-docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [lint, unit-tests]  # Run after tests pass
+    
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Cache Docker layers
+      uses: actions/cache@v4
+      with:
+        path: /tmp/.buildx-cache
+        key: ${{ runner.os }}-buildx-${{ hashFiles('docker/Dockerfile', 'go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-buildx-
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.DOCKER_IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+    
+    - name: Build Docker image (no push)
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./docker/Dockerfile
+        push: false  # Don't push for now
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=local,src=/tmp/.buildx-cache
+        cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+        build-args: |
+          BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          VCS_REF=${{ github.sha }}
+          VERSION=${{ steps.meta.outputs.version }}
+    
+    - name: Save Docker image
+      run: |
+        docker save ${{ env.DOCKER_IMAGE_NAME }}:latest -o /tmp/trading-engine.tar
+    
+    - name: Upload Docker image artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: docker-image
+        path: /tmp/trading-engine.tar
+        retention-days: 1
+        compression-level: 0  # Already compressed, skip re-compression
+    
+    # Move cache to prevent unbounded growth
+    - name: Update Docker cache
+      run: |
+        rm -rf /tmp/.buildx-cache
+        mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+  # ============================================
+  # Job 5: Docker Image Security Scan
+  # ============================================
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: build-docker
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Download Docker image
+      uses: actions/download-artifact@v3
+      with:
+        name: docker-image
+        path: /tmp
+    
+    - name: Load Docker image
+      run: docker load -i /tmp/trading-engine.tar
+    
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.DOCKER_IMAGE_NAME }}:latest
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH'
+        exit-code: '0'  # Don't fail on vulnerabilities (warning only)
+    
+    - name: Upload Trivy results to GitHub Security
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+    
+    - name: Run Trivy for human-readable output
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.DOCKER_IMAGE_NAME }}:latest
+        format: 'table'
+        severity: 'CRITICAL,HIGH'
+
+  # ============================================
+  # Job 6: Quick Integration Test (Smoke Test)
+  # ============================================
+  smoke-test:
+    name: Smoke Test
+    runs-on: ubuntu-latest
+    needs: build-docker
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Download Docker image
+      uses: actions/download-artifact@v4
+      with:
+        name: docker-image
+        path: /tmp
+    
+    - name: Load Docker image
+      run: docker load -i /tmp/trading-engine.tar
+    
+    - name: Start services with Docker Compose
+      run: |
+        docker-compose up -d
+        echo "Waiting for services to be healthy..."
+        timeout 60 bash -c 'until docker-compose ps | grep -q "healthy"; do sleep 2; done'
+    
+    - name: Run smoke tests
+      run: |
+        # Test health endpoint
+        curl -f http://localhost:8080/healthz || exit 1
+        
+        # Test order submission
+        curl -X POST http://localhost:8080/orders \
+          -H "Content-Type: application/json" \
+          -d '{"instrument":"BTC-USD","side":"BUY","orderType":"LIMIT","price":50000,"quantity":0.1}' \
+          -f || exit 1
+        
+        # Test metrics endpoint
+        curl -f http://localhost:9090/metrics | grep -q "http_requests_total" || exit 1
+        
+        echo "All smoke tests passed!"
+    
+    - name: Show service logs on failure
+      if: failure()
+      run: docker-compose logs
+    
+    - name: Stop services
+      if: always()
+      run: docker-compose down -v
+
+  # ============================================
+  # Job 7: Publish Docker Image (Optional)
+  # ============================================
+  publish-image:
+    name: Publish Docker Image
+    runs-on: ubuntu-latest
+    needs: [build-docker, integration-tests, smoke-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.DOCKER_IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+    
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./docker/Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+    
+    - name: Generate SBOM
+      uses: anchore/sbom-action@v0
+      with:
+        image: ${{ steps.meta.outputs.tags }}
+        format: cyclonedx-json
+        output-file: sbom.json
+    
+    - name: Upload SBOM
+      uses: actions/upload-artifact@v4
+      with:
+        name: sbom
+        path: sbom.json
+
+  # ============================================
+  # Job 8: Notification (Optional)
+  # ============================================
+  notify:
+    name: Notify Results
+    runs-on: ubuntu-latest
+    needs: [lint, unit-tests, integration-tests, build-docker, smoke-test]
+    if: always()
+    
+    steps:
+    - name: Check job statuses
+      id: check
+      run: |
+        if [ "${{ needs.lint.result }}" = "failure" ] || \
+           [ "${{ needs.unit-tests.result }}" = "failure" ] || \
+           [ "${{ needs.integration-tests.result }}" = "failure" ] || \
+           [ "${{ needs.build-docker.result }}" = "failure" ] || \
+           [ "${{ needs.smoke-test.result }}" = "failure" ]; then
+          echo "status=failure" >> $GITHUB_OUTPUT
+          echo "message=Pipeline failed" >> $GITHUB_OUTPUT
+        else
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "message=Pipeline passed" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Create job summary
+      run: |
+        echo "## CI/CD Pipeline Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Lint | ${{ needs.lint.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Unit Tests | ${{ needs.unit-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Docker Build | ${{ needs.build-docker.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Smoke Test | ${{ needs.smoke-test.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Overall Status**: ${{ steps.check.outputs.message }}" >> $GITHUB_STEP_SUMMARY

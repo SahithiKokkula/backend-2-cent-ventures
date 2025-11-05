@@ -1,0 +1,85 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: trading-postgres
+    environment:
+      POSTGRES_DB: trading
+      POSTGRES_USER: trader
+      POSTGRES_PASSWORD: devpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trader -d trading"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: trading-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  trading-engine:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: trading-engine
+    ports:
+      - "8080:8080"      # HTTP API
+      - "8081:8081"      # WebSocket
+      - "9090:9090"      # Metrics
+    env_file:
+      - .env             # Load configuration from .env file
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: trading
+      DB_USER: trader
+      DB_PASSWORD: devpass
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      LOG_LEVEL: info    # Set to 'debug' for verbose logging, 'info' for production
+      HTTP_PORT: 8080
+      WS_PORT: 8081
+      METRICS_PORT: 9090
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    # Structured JSON logging with rotation (50MB per file, keep 10 files)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"      # Rotate when log file reaches 50MB
+        max-file: "10"       # Keep 10 rotated files (500MB total)
+        compress: "true"     # Compress rotated log files to save disk space
+        labels: "service,environment"
+        tag: "{{.Name}}/{{.ID}}"
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  default:
+    name: trading-network

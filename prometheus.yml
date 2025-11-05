@@ -1,0 +1,36 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'trading-engine'
+
+# Alertmanager configuration (optional)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - 'localhost:9093'
+
+# Load alerting rules
+# rule_files:
+#   - "alerts.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Trading Engine metrics
+  - job_name: 'trading-engine'
+    static_configs:
+      - targets: ['host.docker.internal:8080']  # Use host.docker.internal when running Prometheus in Docker
+        # - targets: ['localhost:8080']           # Use localhost when running Prometheus locally
+        labels:
+          environment: 'development'
+          service: 'trading-engine'
+    
+    metrics_path: '/metrics'
+    scrape_interval: 5s  # Scrape every 5 seconds for real-time monitoring
+    scrape_timeout: 5s
+
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
