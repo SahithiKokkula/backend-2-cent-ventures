@@ -4,10 +4,10 @@ import (
 	"container/list"
 	"sync"
 
+	"github.com/SahithiKokkula/backend-2-cent-ventures/models"
 	"github.com/google/btree"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
-	"github.com/yourusername/trading-engine/models"
 )
 
 type PriceLevel struct {
@@ -59,7 +59,7 @@ func (pl *PriceLevel) Less(than btree.Item) bool {
 
 type OrderBookSide struct {
 	tree *btree.BTree
-	mu   sync.RWMutex
+	// mu sync.RWMutex // Unused - synchronization handled at OrderBook level
 }
 
 func NewOrderBookSide() *OrderBookSide {

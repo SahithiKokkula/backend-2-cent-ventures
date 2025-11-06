@@ -7,15 +7,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yourusername/trading-engine/logging"
+	"github.com/SahithiKokkula/backend-2-cent-ventures/logging"
 )
 
 // Middleware creates HTTP middleware for rate limiting
 type Middleware struct {
-	limiter       *TokenBucketLimiter
-	keyExtractor  KeyExtractor
-	errorHandler  ErrorHandler
-	skipPaths     map[string]bool
+	limiter      *TokenBucketLimiter
+	keyExtractor KeyExtractor
+	errorHandler ErrorHandler
+	skipPaths    map[string]bool
 }
 
 // KeyExtractor extracts the rate limit key from the request
@@ -38,18 +38,18 @@ func NewMiddleware(config MiddlewareConfig) *Middleware {
 	if config.KeyExtractor == nil {
 		config.KeyExtractor = ClientIDAndIPKeyExtractor
 	}
-	
+
 	// Use default error handler if not provided
 	if config.ErrorHandler == nil {
 		config.ErrorHandler = DefaultErrorHandler
 	}
-	
+
 	// Build skip paths map
 	skipPaths := make(map[string]bool)
 	for _, path := range config.SkipPaths {
 		skipPaths[path] = true
 	}
-	
+
 	return &Middleware{
 		limiter:      config.Limiter,
 		keyExtractor: config.KeyExtractor,
@@ -66,10 +66,10 @@ func (m *Middleware) Handler(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		
+
 		// Extract client key
 		clientKey := m.keyExtractor(r)
-		
+
 		// Check rate limit
 		result, err := m.limiter.Allow(r.Context(), clientKey)
 		if err != nil {
@@ -78,17 +78,17 @@ func (m *Middleware) Handler(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		
+
 		// Add rate limit headers
 		w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", m.limiter.maxTokens))
 		w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", result.Remaining))
-		
+
 		if !result.Allowed {
 			// Rate limit exceeded
 			m.errorHandler(w, r, result)
 			return
 		}
-		
+
 		// Allow request
 		next.ServeHTTP(w, r)
 	})
@@ -102,12 +102,12 @@ func ClientIDAndIPKeyExtractor(r *http.Request) string {
 	if clientID := r.URL.Query().Get("client_id"); clientID != "" {
 		return "client:" + clientID
 	}
-	
+
 	// Try to get client_id from header
 	if clientID := r.Header.Get("X-Client-ID"); clientID != "" {
 		return "client:" + clientID
 	}
-	
+
 	// Fall back to IP address
 	ip := GetClientIP(r)
 	return "ip:" + ip
@@ -140,19 +140,19 @@ func GetClientIP(r *http.Request) string {
 			return strings.TrimSpace(ips[0])
 		}
 	}
-	
+
 	// Check X-Real-IP header
 	realIP := r.Header.Get("X-Real-IP")
 	if realIP != "" {
 		return realIP
 	}
-	
+
 	// Fall back to RemoteAddr
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
 	}
-	
+
 	return ip
 }
 
@@ -161,12 +161,12 @@ func GetClientIP(r *http.Request) string {
 // DefaultErrorHandler returns HTTP 429 with Retry-After header
 func DefaultErrorHandler(w http.ResponseWriter, r *http.Request, result *RateLimitResult) {
 	retryAfterSeconds := int(result.RetryAfter.Seconds()) + 1
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfterSeconds))
 	w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", result.ResetAt.Unix()))
 	w.WriteHeader(http.StatusTooManyRequests)
-	
+
 	// Log rate limit exceeded
 	correlationID := r.Context().Value("correlation_id")
 	if correlationID != nil {
@@ -174,9 +174,9 @@ func DefaultErrorHandler(w http.ResponseWriter, r *http.Request, result *RateLim
 	} else {
 		logging.GetLogger().WithField("retry_after", retryAfterSeconds).Warn("Rate limit exceeded")
 	}
-	
+
 	// Return JSON error response
-	fmt.Fprintf(w, `{
+	_, _ = fmt.Fprintf(w, `{
 		"success": false,
 		"error": "Rate limit exceeded",
 		"message": "Too many requests. Please slow down.",
@@ -189,13 +189,13 @@ func DefaultErrorHandler(w http.ResponseWriter, r *http.Request, result *RateLim
 func CustomErrorHandler(message string, statusCode int) ErrorHandler {
 	return func(w http.ResponseWriter, r *http.Request, result *RateLimitResult) {
 		retryAfterSeconds := int(result.RetryAfter.Seconds()) + 1
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfterSeconds))
 		w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", result.ResetAt.Unix()))
 		w.WriteHeader(statusCode)
-		
-		fmt.Fprintf(w, `{
+
+		_, _ = fmt.Fprintf(w, `{
 			"success": false,
 			"error": "%s",
 			"retry_after_seconds": %d,

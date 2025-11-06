@@ -40,7 +40,7 @@ func (vm *ValidationMiddleware) ValidateContentType(next http.Handler) http.Hand
 		if r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH" {
 			contentType := r.Header.Get("Content-Type")
 			if contentType != "" && contentType != "application/json" {
-				vm.sendError(w, ErrInvalidContentType, "INVALID_CONTENT_TYPE", 
+				vm.sendError(w, ErrInvalidContentType, "INVALID_CONTENT_TYPE",
 					http.StatusUnsupportedMediaType)
 				return
 			}
@@ -104,7 +104,7 @@ func (vm *ValidationMiddleware) SecureHeadersMiddleware(next http.Handler) http.
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'")
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-		
+
 		next.ServeHTTP(w, r)
 	})
 }
@@ -116,10 +116,10 @@ func (vm *ValidationMiddleware) LogRequestMiddleware(next http.Handler) http.Han
 
 		// Log request
 		if vm.logger != nil {
-			vm.logger.Printf("[%s] %s %s from %s", 
+			vm.logger.Printf("[%s] %s %s from %s",
 				time.Now().Format(time.RFC3339),
-				r.Method, 
-				r.URL.Path, 
+				r.Method,
+				r.URL.Path,
 				r.RemoteAddr,
 			)
 		}
@@ -130,10 +130,10 @@ func (vm *ValidationMiddleware) LogRequestMiddleware(next http.Handler) http.Han
 		// Log duration
 		duration := time.Since(start)
 		if vm.logger != nil {
-			vm.logger.Printf("[%s] %s %s completed in %v", 
+			vm.logger.Printf("[%s] %s %s completed in %v",
 				time.Now().Format(time.RFC3339),
-				r.Method, 
-				r.URL.Path, 
+				r.Method,
+				r.URL.Path,
 				duration,
 			)
 		}
@@ -146,16 +146,16 @@ func (vm *ValidationMiddleware) sendError(w http.ResponseWriter, err error, code
 	w.WriteHeader(statusCode)
 
 	response := ErrorResponse{
-		Error:   err.Error(),
-		Code:    code,
-		Time:    time.Now(),
+		Error: err.Error(),
+		Code:  code,
+		Time:  time.Now(),
 	}
 
 	if vm.logger != nil {
 		vm.logger.Printf("Error [%s]: %s", code, err.Error())
 	}
 
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // RateLimitConfig holds rate limiting configuration
@@ -216,7 +216,7 @@ func handleOrder(w http.ResponseWriter, r *http.Request) {
 
 	// Process order...
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status":   "success",
 		"order_id": "generated-order-id",
 	})

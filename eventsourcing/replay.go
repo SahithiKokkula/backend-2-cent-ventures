@@ -91,21 +91,21 @@ func (r *ReplayEngine) ReplayOrderToTimestamp(ctx context.Context, orderID uuid.
 
 // OrderState represents the current state of an order
 type OrderState struct {
-	OrderID         uuid.UUID
-	ClientID        string
-	Instrument      string
-	Side            string
-	Type            string
-	Price           float64
-	OriginalQty     float64
-	RemainingQty    float64
-	FilledQty       float64
+	OrderID          uuid.UUID
+	ClientID         string
+	Instrument       string
+	Side             string
+	Type             string
+	Price            float64
+	OriginalQty      float64
+	RemainingQty     float64
+	FilledQty        float64
 	AverageFillPrice float64
-	Status          string // "open", "partial", "filled", "cancelled"
-	TimeInForce     string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	Version         int
+	Status           string // "open", "partial", "filled", "cancelled"
+	TimeInForce      string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	Version          int
 }
 
 // Apply applies an event to update the order state

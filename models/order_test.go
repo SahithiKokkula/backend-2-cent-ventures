@@ -191,9 +191,9 @@ func TestOrderCancel(t *testing.T) {
 
 	oldTime := order.UpdatedAt
 	time.Sleep(10 * time.Millisecond)
-	
+
 	order.Cancel()
-	
+
 	if order.Status != OrderStatusCancelled {
 		t.Errorf("Expected status %s, got %s", OrderStatusCancelled, order.Status)
 	}
@@ -207,7 +207,7 @@ func TestOrderReject(t *testing.T) {
 		decimal.NewFromFloat(70000), decimal.NewFromFloat(10.0))
 
 	order.Reject()
-	
+
 	if order.Status != OrderStatusRejected {
 		t.Errorf("Expected status %s, got %s", OrderStatusRejected, order.Status)
 	}

@@ -9,6 +9,7 @@ import (
 	"runtime"
 	rpprof "runtime/pprof"
 	"runtime/trace"
+	"strings"
 	"time"
 )
 
@@ -189,7 +190,7 @@ func (p *Profiler) captureCPUProfile(timestamp string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	log.Printf("🔍 Capturing CPU profile for %v...", p.config.ProfileDuration)
 	if err := rpprof.StartCPUProfile(f); err != nil {
@@ -211,7 +212,7 @@ func (p *Profiler) captureMemProfile(timestamp string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Force GC to get accurate memory stats
 	runtime.GC()
@@ -232,7 +233,7 @@ func (p *Profiler) captureGoroutineProfile(timestamp string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if err := rpprof.Lookup("goroutine").WriteTo(f, 2); err != nil {
 		return err
@@ -245,37 +246,34 @@ func (p *Profiler) captureGoroutineProfile(timestamp string) error {
 
 // captureBlockProfile captures a block profile
 func (p *Profiler) captureBlockProfile(timestamp string) error {
-	filename := fmt.Sprintf("%s/block_%s.prof", p.config.OutputDir, timestamp)
-	f, err := os.Create(filename)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	if err := rpprof.Lookup("block").WriteTo(f, 0); err != nil {
-		return err
-	}
-
-	log.Printf("Block profile saved: %s", filename)
-	log.Printf("   Analyze: go tool pprof -http=:8083 %s", filename)
-	return nil
+	return p.capturePprofProfile("block", timestamp, "block", 8083, 0)
 }
 
 // captureMutexProfile captures a mutex profile
 func (p *Profiler) captureMutexProfile(timestamp string) error {
-	filename := fmt.Sprintf("%s/mutex_%s.prof", p.config.OutputDir, timestamp)
+	return p.capturePprofProfile("mutex", timestamp, "mutex", 8084, 0)
+}
+
+// capturePprofProfile is a helper function to capture pprof profiles
+func (p *Profiler) capturePprofProfile(profileType, timestamp, profileName string, port int, debug int) error {
+	filename := fmt.Sprintf("%s/%s_%s.prof", p.config.OutputDir, profileName, timestamp)
 	f, err := os.Create(filename)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
-	if err := rpprof.Lookup("mutex").WriteTo(f, 0); err != nil {
+	if err := rpprof.Lookup(profileType).WriteTo(f, debug); err != nil {
 		return err
 	}
 
-	log.Printf("Mutex profile saved: %s", filename)
-	log.Printf("   Analyze: go tool pprof -http=:8084 %s", filename)
+	// Capitalize first letter of profile name
+	displayName := profileName
+	if len(profileName) > 0 {
+		displayName = strings.ToUpper(profileName[:1]) + profileName[1:]
+	}
+	log.Printf("%s profile saved: %s", displayName, filename)
+	log.Printf("   Analyze: go tool pprof -http=:%d %s", port, filename)
 	return nil
 }
 
@@ -286,7 +284,7 @@ func (p *Profiler) captureTrace(timestamp string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	log.Printf("🔍 Capturing trace for %v...", p.config.ProfileDuration)
 	if err := trace.Start(f); err != nil {

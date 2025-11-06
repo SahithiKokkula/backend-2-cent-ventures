@@ -7,21 +7,21 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/SahithiKokkula/backend-2-cent-ventures/models"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
-	"github.com/yourusername/trading-engine/models"
 )
 
 // OrderEventType represents the type of order event
 type OrderEventType string
 
 const (
-	OrderEventCreated          OrderEventType = "ORDER_CREATED"
-	OrderEventFilled           OrderEventType = "ORDER_FILLED"
-	OrderEventPartiallyFilled  OrderEventType = "ORDER_PARTIALLY_FILLED"
-	OrderEventCancelled        OrderEventType = "ORDER_CANCELLED"
-	OrderEventRejected         OrderEventType = "ORDER_REJECTED"
-	OrderEventUpdated          OrderEventType = "ORDER_UPDATED"
+	OrderEventCreated         OrderEventType = "ORDER_CREATED"
+	OrderEventFilled          OrderEventType = "ORDER_FILLED"
+	OrderEventPartiallyFilled OrderEventType = "ORDER_PARTIALLY_FILLED"
+	OrderEventCancelled       OrderEventType = "ORDER_CANCELLED"
+	OrderEventRejected        OrderEventType = "ORDER_REJECTED"
+	OrderEventUpdated         OrderEventType = "ORDER_UPDATED"
 )
 
 // OrderEvent represents an immutable event in the order lifecycle
@@ -38,13 +38,13 @@ type OrderEvent struct {
 
 // OrderEventData structures for different event types
 type OrderCreatedData struct {
-	ClientID   string          `json:"client_id"`
-	Instrument string          `json:"instrument"`
-	Side       string          `json:"side"`
-	Type       string          `json:"type"`
-	Price      string          `json:"price"`
-	Quantity   string          `json:"quantity"`
-	Status     string          `json:"status"`
+	ClientID   string `json:"client_id"`
+	Instrument string `json:"instrument"`
+	Side       string `json:"side"`
+	Type       string `json:"type"`
+	Price      string `json:"price"`
+	Quantity   string `json:"quantity"`
+	Status     string `json:"status"`
 }
 
 type OrderFillData struct {
@@ -188,7 +188,9 @@ func (oes *OrderEventStore) GetOrderHistory(ctx context.Context, orderID uuid.UU
 	if err != nil {
 		return nil, fmt.Errorf("failed to get order history: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close() // Ignore error on defer close
+	}()
 
 	var events []*OrderEvent
 	for rows.Next() {
@@ -299,7 +301,9 @@ func (oes *OrderEventStore) VerifySnapshotConsistency(ctx context.Context) ([]In
 	if err != nil {
 		return nil, fmt.Errorf("failed to verify consistency: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close() // Ignore error on defer close
+	}()
 
 	var inconsistencies []InconsistentOrder
 	for rows.Next() {
@@ -389,7 +393,9 @@ func (oes *OrderEventStore) GetOrdersByClientID(ctx context.Context, clientID st
 	if err != nil {
 		return nil, fmt.Errorf("failed to get orders by client: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close() // Ignore error on defer close
+	}()
 
 	var orders []*models.Order
 	for rows.Next() {
@@ -467,9 +473,9 @@ func (oes *OrderEventStore) GetOrderStats(ctx context.Context) (*OrderStats, err
 
 // OrderStats contains statistics about order events
 type OrderStats struct {
-	TotalOrders     int64
-	TotalEvents     int64
-	CreatedCount    int64
-	FilledCount     int64
-	CancelledCount  int64
+	TotalOrders    int64
+	TotalEvents    int64
+	CreatedCount   int64
+	FilledCount    int64
+	CancelledCount int64
 }

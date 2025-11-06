@@ -36,17 +36,17 @@ const (
 
 // Order represents a trading order in the system
 type Order struct {
-	ID              uuid.UUID       `json:"id" db:"order_id"`
-	ClientID        string          `json:"client_id" db:"client_id"`
-	Instrument      string          `json:"instrument" db:"instrument"`
-	Side            OrderSide       `json:"side" db:"side"`
-	Type            OrderType       `json:"type" db:"type"`
-	Price           decimal.Decimal `json:"price" db:"price"`
-	Quantity        decimal.Decimal `json:"quantity" db:"quantity"`
-	FilledQuantity  decimal.Decimal `json:"filled_quantity" db:"filled_quantity"`
-	Status          OrderStatus     `json:"status" db:"status"`
-	CreatedAt       time.Time       `json:"created_at" db:"created_at"`
-	UpdatedAt       time.Time       `json:"updated_at" db:"updated_at"`
+	ID             uuid.UUID       `json:"id" db:"order_id"`
+	ClientID       string          `json:"client_id" db:"client_id"`
+	Instrument     string          `json:"instrument" db:"instrument"`
+	Side           OrderSide       `json:"side" db:"side"`
+	Type           OrderType       `json:"type" db:"type"`
+	Price          decimal.Decimal `json:"price" db:"price"`
+	Quantity       decimal.Decimal `json:"quantity" db:"quantity"`
+	FilledQuantity decimal.Decimal `json:"filled_quantity" db:"filled_quantity"`
+	Status         OrderStatus     `json:"status" db:"status"`
+	CreatedAt      time.Time       `json:"created_at" db:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at" db:"updated_at"`
 }
 
 // NewOrder creates a new Order instance with default values

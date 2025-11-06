@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/SahithiKokkula/backend-2-cent-ventures/logging"
+	"github.com/SahithiKokkula/backend-2-cent-ventures/models"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"github.com/shopspring/decimal"
-	"github.com/yourusername/trading-engine/logging"
-	"github.com/yourusername/trading-engine/models"
 )
 
 // Error types for retry logic
@@ -81,7 +81,9 @@ func (ps *PostgresStore) PersistTradeOnly(ctx context.Context, trade *TradeRecor
 		if err != nil {
 			return fmt.Errorf("failed to begin transaction: %w", err)
 		}
-		defer tx.Rollback()
+		defer func() {
+			_ = tx.Rollback() // Ignore error; will fail if transaction already committed
+		}()
 
 		err = ps.insertTrade(ctx, tx, trade)
 		if err != nil {
@@ -110,7 +112,9 @@ func (ps *PostgresStore) persistTradeWithOrdersTx(ctx context.Context, trade *Tr
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		_ = tx.Rollback() // Ignore error; will fail if transaction already committed
+	}()
 
 	err = ps.insertTrade(ctx, tx, trade)
 	if err != nil {
@@ -296,7 +300,9 @@ func (ps *PostgresStore) persistMultipleTradesTx(ctx context.Context, trades []*
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		_ = tx.Rollback() // Ignore error; will fail if transaction already committed
+	}()
 
 	// Insert all trades
 	for _, trade := range trades {
@@ -472,7 +478,9 @@ func (ps *PostgresStore) GetTradesByInstrument(ctx context.Context, instrument s
 	if err != nil {
 		return nil, fmt.Errorf("failed to query trades: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close() // Ignore error on defer close
+	}()
 
 	trades := make([]*TradeRecord, 0)
 
@@ -529,7 +537,9 @@ func (ps *PostgresStore) GetOrdersByClientID(ctx context.Context, clientID strin
 	if err != nil {
 		return nil, fmt.Errorf("failed to query orders: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close() // Ignore error on defer close
+	}()
 
 	orders := make([]*models.Order, 0)
 

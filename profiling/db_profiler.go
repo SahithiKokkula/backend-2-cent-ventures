@@ -327,7 +327,9 @@ func GetIndexUsage(db *sql.DB, tableName string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get index usage for table %s: %w", tableName, err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close() // Ignore error on defer close
+	}()
 
 	log.Printf(">Index Usage Statistics: %s", tableName)
 	log.Println("================================================================================")
@@ -363,9 +365,7 @@ func GetIndexUsage(db *sql.DB, tableName string) error {
 
 // truncateQuery truncates a query string for display
 func truncateQuery(query string, maxLen int) string {
-	// Remove extra whitespace
-	query = fmt.Sprintf("%s", query)
-
+	// query is already a string, no need for fmt.Sprintf
 	if len(query) > maxLen {
 		return query[:maxLen] + "..."
 	}

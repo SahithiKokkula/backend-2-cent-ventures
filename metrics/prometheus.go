@@ -53,7 +53,7 @@ var (
 	)
 
 	// Additional useful metrics
-	
+
 	// Gauge: Best bid/ask prices
 	BestBidPrice = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{

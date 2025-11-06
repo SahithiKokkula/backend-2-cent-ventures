@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SahithiKokkula/backend-2-cent-ventures/models"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
-	"github.com/yourusername/trading-engine/models"
 )
 
 // EventRetryQueue manages failed DB write retries

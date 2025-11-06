@@ -9,13 +9,13 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/SahithiKokkula/backend-2-cent-ventures/engine"
+	"github.com/SahithiKokkula/backend-2-cent-ventures/logging"
+	"github.com/SahithiKokkula/backend-2-cent-ventures/metrics"
+	"github.com/SahithiKokkula/backend-2-cent-ventures/models"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
-	"github.com/yourusername/trading-engine/engine"
-	"github.com/yourusername/trading-engine/logging"
-	"github.com/yourusername/trading-engine/metrics"
-	"github.com/yourusername/trading-engine/models"
 )
 
 // OrderRequest represents the incoming order request
@@ -64,7 +64,7 @@ func HandleSubmitOrder(me *engine.MatchingEngine, redisClient *redis.Client) htt
 				w.Header().Set("X-Idempotency-Key", idempotencyKey)
 				w.Header().Set("X-Idempotency-Replayed", "true")
 				w.WriteHeader(http.StatusAccepted)
-				json.NewEncoder(w).Encode(cachedResponse)
+				_ = json.NewEncoder(w).Encode(cachedResponse)
 				return
 			}
 		}
@@ -77,7 +77,7 @@ func HandleSubmitOrder(me *engine.MatchingEngine, redisClient *redis.Client) htt
 			respondError(w, http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
 			return
 		}
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 
 		if validationErrors := validateOrderRequest(&req); len(validationErrors) > 0 {
 			metrics.RecordOrderRejected(req.Instrument, "validation_failed")
@@ -86,7 +86,7 @@ func HandleSubmitOrder(me *engine.MatchingEngine, redisClient *redis.Client) htt
 
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": false,
 				"error":   "Validation failed",
 				"errors":  validationErrors,
@@ -184,19 +184,15 @@ func HandleSubmitOrder(me *engine.MatchingEngine, redisClient *redis.Client) htt
 
 		// Cache response if idempotency key was provided
 		if idempotencyKey != "" && redisClient != nil {
-			if err := cacheIdempotencyResponse(r.Context(), redisClient, idempotencyKey, &orderResponse); err != nil {
-				// Log error but don't fail the request
-				// The order was successfully processed
-			}
-		}
-
-		// Return 202 Accepted (order has been accepted for processing)
+			_ = cacheIdempotencyResponse(r.Context(), redisClient, idempotencyKey, &orderResponse)
+			// Ignore caching errors - the order was successfully processed
+		} // Return 202 Accepted (order has been accepted for processing)
 		w.Header().Set("Content-Type", "application/json")
 		if idempotencyKey != "" {
 			w.Header().Set("X-Idempotency-Key", idempotencyKey)
 		}
 		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(orderResponse)
+		_ = json.NewEncoder(w).Encode(orderResponse)
 	}
 }
 
@@ -301,7 +297,7 @@ func validateOrderRequest(req *OrderRequest) []ValidationError {
 func respondError(w http.ResponseWriter, statusCode int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":   false,
 		"error":     message,
 		"timestamp": time.Now().UnixMilli(),

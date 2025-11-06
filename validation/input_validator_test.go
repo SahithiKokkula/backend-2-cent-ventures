@@ -869,7 +869,7 @@ func TestHTTPHandlerIntegration(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "valid"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "valid"})
 	})
 
 	tests := []struct {
@@ -913,12 +913,12 @@ func TestHTTPHandlerIntegration(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(tt.method, "/order", bytes.NewBufferString(tt.body))
 			req.Header.Set("Content-Type", tt.contentType)
-			
+
 			rr := httptest.NewRecorder()
 			handler.ServeHTTP(rr, req)
 
 			if rr.Code != tt.expectedStatus {
-				t.Errorf("handler returned wrong status code: got %v want %v, body: %s", 
+				t.Errorf("handler returned wrong status code: got %v want %v, body: %s",
 					rr.Code, tt.expectedStatus, rr.Body.String())
 			}
 		})

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/yourusername/trading-engine/engine"
+	"github.com/SahithiKokkula/backend-2-cent-ventures/engine"
 )
 
 // SnapshotHandler handles snapshot-related HTTP requests
@@ -49,7 +49,7 @@ func (h *SnapshotHandler) HandleTriggerSnapshot(w http.ResponseWriter, r *http.R
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		req.TriggeredBy = "admin_api"
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	err := h.snapshotManager.TakeSnapshot(engine.SnapshotTypeOnDemand, req.TriggeredBy)
 	if err != nil {
@@ -144,7 +144,7 @@ func (h *SnapshotHandler) HandleGetSnapshot(w http.ResponseWriter, r *http.Reque
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 		return
 	}
 
@@ -168,7 +168,7 @@ func (h *SnapshotHandler) HandleGetSnapshot(w http.ResponseWriter, r *http.Reque
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // HandleRestoreSnapshot handles POST /admin/snapshot/{id}/restore
@@ -251,7 +251,7 @@ func (h *SnapshotHandler) HandleValidateSnapshot(w http.ResponseWriter, r *http.
 func (h *SnapshotHandler) respondJSON(w http.ResponseWriter, statusCode int, response SnapshotResponse) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // RegisterRoutes registers snapshot routes with a mux

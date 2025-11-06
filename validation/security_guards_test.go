@@ -7,6 +7,24 @@ import (
 	"testing"
 )
 
+// Helper function to check if expected pattern is detected
+func assertPatternDetected(t *testing.T, input string, expectedPattern string) {
+	t.Helper()
+	patterns := DetectSuspiciousPatterns(input)
+
+	found := false
+	for _, pattern := range patterns {
+		if strings.Contains(pattern, expectedPattern) {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Errorf("%s pattern not detected in: %s", expectedPattern, input)
+	}
+}
+
 // TestMaliciousSQLInjectionAttempts tests SQL injection detection
 func TestMaliciousSQLInjectionAttempts(t *testing.T) {
 	tests := []struct {
@@ -59,7 +77,7 @@ func TestMaliciousSQLInjectionAttempts(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			patterns := DetectSuspiciousPatterns(tt.input)
-			
+
 			// Check if expected patterns are detected
 			for _, expected := range tt.expected {
 				found := false
@@ -123,20 +141,7 @@ func TestMaliciousXSSAttempts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			patterns := DetectSuspiciousPatterns(tt.input)
-			
-			// Should detect XSS patterns
-			hasXSS := false
-			for _, pattern := range patterns {
-				if strings.Contains(pattern, "XSS") {
-					hasXSS = true
-					break
-				}
-			}
-
-			if !hasXSS {
-				t.Errorf("XSS pattern not detected in: %s", tt.input)
-			}
+			assertPatternDetected(t, tt.input, "XSS")
 		})
 	}
 }
@@ -171,19 +176,7 @@ func TestMaliciousPathTraversalAttempts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			patterns := DetectSuspiciousPatterns(tt.input)
-			
-			hasPathTraversal := false
-			for _, pattern := range patterns {
-				if strings.Contains(pattern, "PATH_TRAVERSAL") {
-					hasPathTraversal = true
-					break
-				}
-			}
-
-			if !hasPathTraversal {
-				t.Errorf("Path traversal not detected in: %s", tt.input)
-			}
+			assertPatternDetected(t, tt.input, "PATH_TRAVERSAL")
 		})
 	}
 }
@@ -230,19 +223,7 @@ func TestMaliciousCommandInjectionAttempts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			patterns := DetectSuspiciousPatterns(tt.input)
-			
-			hasCmdInjection := false
-			for _, pattern := range patterns {
-				if strings.Contains(pattern, "CMD_INJECTION") {
-					hasCmdInjection = true
-					break
-				}
-			}
-
-			if !hasCmdInjection {
-				t.Errorf("Command injection not detected in: %s", tt.input)
-			}
+			assertPatternDetected(t, tt.input, "CMD_INJECTION")
 		})
 	}
 }
@@ -274,7 +255,7 @@ func TestMaliciousLDAPInjectionAttempts(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			patterns := DetectSuspiciousPatterns(tt.input)
-			
+
 			hasLDAPInjection := false
 			for _, pattern := range patterns {
 				if strings.Contains(pattern, "LDAP_INJECTION") {
@@ -321,7 +302,7 @@ func TestMaliciousNoSQLInjectionAttempts(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			patterns := DetectSuspiciousPatterns(tt.input)
-			
+
 			hasSuspicious := false
 			for _, pattern := range patterns {
 				if strings.Contains(pattern, "NOSQL_INJECTION") || strings.Contains(pattern, "SQL_INJECTION") {
@@ -364,7 +345,7 @@ func TestMaliciousControlCharacters(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			patterns := DetectSuspiciousPatterns(tt.input)
-			
+
 			hasControlChar := false
 			for _, pattern := range patterns {
 				if strings.Contains(pattern, "CONTROL_CHARACTERS") || strings.Contains(pattern, "NULL_BYTE") {
@@ -417,7 +398,7 @@ func TestMalformedInputs(t *testing.T) {
 				ClientID: "client123",
 				Symbol:   "BTCUSD",
 				Side:     "buy",
-				Price:    -0.0,
+				Price:    0.0, // In Go, -0.0 is the same as 0.0
 				Quantity: 1.0,
 			},
 			wantError: true,
@@ -500,7 +481,7 @@ func TestSuspiciousActivityLogger(t *testing.T) {
 
 	// Test logging multiple attempts
 	source := "192.168.1.100"
-	
+
 	// First attempt
 	sal.LogSuspiciousInput(source, "CLIENT_ID", "SQL_INJECTION", "admin' OR '1'='1", "low")
 	if sal.ShouldBlock(source) {
@@ -548,7 +529,7 @@ func TestSuspiciousActivityLogger(t *testing.T) {
 func TestEnhancedValidatorWithSecurity(t *testing.T) {
 	var buf bytes.Buffer
 	logger := log.New(&buf, "", 0)
-	
+
 	validator := NewEnhancedInputValidator(
 		DefaultValidationConfig(),
 		DefaultSecurityConfig(),
@@ -633,7 +614,7 @@ func TestEnhancedValidatorWithSecurity(t *testing.T) {
 func TestSecurityReport(t *testing.T) {
 	var buf bytes.Buffer
 	logger := log.New(&buf, "", 0)
-	
+
 	validator := NewEnhancedInputValidator(
 		DefaultValidationConfig(),
 		DefaultSecurityConfig(),
@@ -643,8 +624,8 @@ func TestSecurityReport(t *testing.T) {
 	// Generate some suspicious activity
 	sources := []string{"192.168.1.1", "192.168.1.2", "192.168.1.3"}
 	for _, source := range sources {
-		validator.ValidateClientIDWithSecurity("admin' OR '1'='1", source)
-		validator.ValidateClientIDWithSecurity("<script>alert(1)</script>", source)
+		_ = validator.ValidateClientIDWithSecurity("admin' OR '1'='1", source)
+		_ = validator.ValidateClientIDWithSecurity("<script>alert(1)</script>", source)
 	}
 
 	// Generate report
@@ -711,14 +692,14 @@ func TestBlockingAfterSuspiciousActivity(t *testing.T) {
 func TestRateLimitReset(t *testing.T) {
 	var buf bytes.Buffer
 	logger := log.New(&buf, "", 0)
-	
+
 	sal := NewSuspiciousActivityLogger(logger, DefaultSecurityConfig())
-	
+
 	source := "192.168.1.100"
-	
+
 	// Log some activity
 	sal.LogSuspiciousInput(source, "TEST", "PATTERN", "payload", "low")
-	
+
 	stats := sal.GetActivityStats(source)
 	if stats == nil || stats.Count != 1 {
 		t.Fatal("Stats should be recorded")
@@ -726,7 +707,7 @@ func TestRateLimitReset(t *testing.T) {
 
 	// Reset stats
 	sal.ResetStats(source)
-	
+
 	stats = sal.GetActivityStats(source)
 	if stats != nil {
 		t.Error("Stats should be cleared after reset")
@@ -736,7 +717,7 @@ func TestRateLimitReset(t *testing.T) {
 // Benchmark malicious input detection
 func BenchmarkDetectSuspiciousPatterns(b *testing.B) {
 	input := "admin' OR '1'='1; DROP TABLE users; <script>alert(1)</script>"
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		DetectSuspiciousPatterns(input)
@@ -752,6 +733,6 @@ func BenchmarkEnhancedValidation(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		validator.ValidateClientIDWithSecurity("client123", "192.168.1.1")
+		_ = validator.ValidateClientIDWithSecurity("client123", "192.168.1.1")
 	}
 }

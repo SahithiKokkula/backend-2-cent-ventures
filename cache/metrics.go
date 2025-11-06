@@ -49,7 +49,7 @@ func NewCacheMetrics() *CacheMetrics {
 
 func (cm *CacheMetrics) RecordHit(symbol string, latency time.Duration) {
 	cm.hits.Add(1)
-	cm.latencySum.Add(int64(latency.Microseconds()))
+	cm.latencySum.Add(latency.Microseconds())
 	cm.latencyCount.Add(1)
 
 	cm.getOrCreateSymbolMetrics(symbol).RecordHit()

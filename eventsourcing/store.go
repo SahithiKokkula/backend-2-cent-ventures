@@ -98,7 +98,9 @@ func (s *PostgresEventStore) LoadEvents(ctx context.Context, aggregateID, aggreg
 	if err != nil {
 		return nil, fmt.Errorf("failed to query events: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close() // Ignore error on defer close
+	}()
 
 	var events []Event
 	for rows.Next() {
@@ -134,7 +136,9 @@ func (s *PostgresEventStore) LoadEventsSince(ctx context.Context, aggregateID, a
 	if err != nil {
 		return nil, fmt.Errorf("failed to query events: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close() // Ignore error on defer close
+	}()
 
 	var events []Event
 	for rows.Next() {

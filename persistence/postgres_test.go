@@ -6,17 +6,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SahithiKokkula/backend-2-cent-ventures/models"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"github.com/shopspring/decimal"
-	"github.com/yourusername/trading-engine/models"
 )
 
 // MockDB setup for testing (requires Docker or local PostgreSQL)
 func setupTestDB(t *testing.T) (*sql.DB, func()) {
 	// Connection string for test database
 	connStr := "postgres://postgres:postgres@localhost:5432/trading_engine_test?sslmode=disable"
-	
+
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		t.Skip("PostgreSQL not available for testing:", err)
@@ -32,8 +32,8 @@ func setupTestDB(t *testing.T) (*sql.DB, func()) {
 	// Cleanup function
 	cleanup := func() {
 		// Clean up test data
-		db.Exec("TRUNCATE trades, orders CASCADE")
-		db.Close()
+		_, _ = db.Exec("TRUNCATE trades, orders CASCADE")
+		_ = db.Close()
 	}
 
 	// Create tables if they don't exist
@@ -243,8 +243,8 @@ func TestTradeIdempotency(t *testing.T) {
 		UpdatedAt:      time.Now(),
 	}
 
-	ps.InsertOrder(ctx, buyOrder)
-	ps.InsertOrder(ctx, sellOrder)
+	_ = ps.InsertOrder(ctx, buyOrder)
+	_ = ps.InsertOrder(ctx, sellOrder)
 
 	// Create trade with same ID twice
 	tradeID := uuid.New()
@@ -340,8 +340,8 @@ func TestPartialFillPersistence(t *testing.T) {
 		UpdatedAt:      time.Now(),
 	}
 
-	ps.InsertOrder(ctx, buyOrder)
-	ps.InsertOrder(ctx, sellOrder)
+	_ = ps.InsertOrder(ctx, buyOrder)
+	_ = ps.InsertOrder(ctx, sellOrder)
 
 	// First partial fill - 5.0 shares
 	trade1 := &TradeRecord{
@@ -505,7 +505,7 @@ func TestPersistMultipleTrades(t *testing.T) {
 			FilledQuantity: decimal.Zero,
 			Status:         models.OrderStatusOpen,
 			CreatedAt:      time.Now(),
-		UpdatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
 		},
 		{
 			ID:             sell1,
@@ -518,7 +518,7 @@ func TestPersistMultipleTrades(t *testing.T) {
 			FilledQuantity: decimal.Zero,
 			Status:         models.OrderStatusOpen,
 			CreatedAt:      time.Now(),
-		UpdatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
 		},
 		{
 			ID:             sell2,
@@ -531,12 +531,12 @@ func TestPersistMultipleTrades(t *testing.T) {
 			FilledQuantity: decimal.Zero,
 			Status:         models.OrderStatusOpen,
 			CreatedAt:      time.Now(),
-		UpdatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
 		},
 	}
 
 	for _, order := range orders {
-		ps.InsertOrder(ctx, order)
+		_ = ps.InsertOrder(ctx, order)
 	}
 
 	// Create 2 trades
@@ -644,8 +644,8 @@ func TestGetTradesByInstrument(t *testing.T) {
 
 		// Direct insert (bypassing order updates for this test)
 		tx, _ := db.Begin()
-		ps.insertTrade(ctx, tx, trade)
-		tx.Commit()
+		_ = ps.insertTrade(ctx, tx, trade)
+		_ = tx.Commit()
 	}
 
 	// Get trades for instrument
@@ -710,8 +710,8 @@ func TestTransactionCrashNoPartialState(t *testing.T) {
 		UpdatedAt:      time.Now(),
 	}
 
-	ps.InsertOrder(ctx, buyOrder)
-	ps.InsertOrder(ctx, sellOrder)
+	_ = ps.InsertOrder(ctx, buyOrder)
+	_ = ps.InsertOrder(ctx, sellOrder)
 
 	tradeID := uuid.New()
 
@@ -739,7 +739,7 @@ func TestTransactionCrashNoPartialState(t *testing.T) {
 	}
 
 	// Simulate crash - rollback instead of commit
-	tx.Rollback()
+	_ = tx.Rollback() // Ignore rollback error in test
 	t.Logf("Transaction rolled back (simulated crash)")
 
 	// Verify trade does NOT exist in database
@@ -809,8 +809,8 @@ func TestTransactionRollbackOnError(t *testing.T) {
 		UpdatedAt:      time.Now(),
 	}
 
-	ps.InsertOrder(ctx, buyOrder)
-	ps.InsertOrder(ctx, sellOrder)
+	_ = ps.InsertOrder(ctx, buyOrder)
+	_ = ps.InsertOrder(ctx, sellOrder)
 
 	// Create valid trade
 	trade := &TradeRecord{
@@ -892,7 +892,7 @@ func TestConcurrentOrderUpdates(t *testing.T) {
 		UpdatedAt:      time.Now(),
 	}
 
-	ps.InsertOrder(ctx, order)
+	_ = ps.InsertOrder(ctx, order)
 
 	// Simulate two concurrent updates to the same order
 	done := make(chan error, 2)
@@ -911,7 +911,7 @@ func TestConcurrentOrderUpdates(t *testing.T) {
 			time.Sleep(50 * time.Millisecond) // Hold lock briefly
 			err = tx1.Commit()
 		} else {
-			tx1.Rollback()
+			_ = tx1.Rollback()
 		}
 		done <- err
 	}()
@@ -930,7 +930,7 @@ func TestConcurrentOrderUpdates(t *testing.T) {
 		if err == nil {
 			err = tx2.Commit()
 		} else {
-			tx2.Rollback()
+			_ = tx2.Rollback()
 		}
 		done <- err
 	}()
@@ -1003,8 +1003,8 @@ func TestDataConsistencyCheck(t *testing.T) {
 		UpdatedAt:      time.Now(),
 	}
 
-	ps.InsertOrder(ctx, buyOrder)
-	ps.InsertOrder(ctx, sellOrder)
+	_ = ps.InsertOrder(ctx, buyOrder)
+	_ = ps.InsertOrder(ctx, sellOrder)
 
 	trade := &TradeRecord{
 		TradeID:     uuid.New(),
@@ -1031,7 +1031,7 @@ func TestDataConsistencyCheck(t *testing.T) {
 		UpdatedAt:      time.Now(),
 	}
 
-	ps.PersistTradeWithOrders(ctx, trade, buyUpdate, sellUpdate)
+	_ = ps.PersistTradeWithOrders(ctx, trade, buyUpdate, sellUpdate)
 
 	// Run consistency checks
 	var orphanedCount int

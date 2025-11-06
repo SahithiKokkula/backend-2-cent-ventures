@@ -56,3 +56,4 @@ load-test-results/
 dist/
 build/
 bin/
+scripts/

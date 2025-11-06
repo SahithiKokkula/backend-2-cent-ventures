@@ -27,7 +27,7 @@ type Hub struct {
 	subscriptions map[Topic]map[*Client]bool
 
 	// Inbound messages from clients
-	register chan *Client
+	register   chan *Client
 	unregister chan *Client
 
 	// Broadcast channels for different topics
@@ -36,10 +36,10 @@ type Hub struct {
 	broadcastOrder          chan *OrderMessage
 
 	// Batching for orderbook updates
-	batchMutex          sync.Mutex
-	pendingDeltas       []*OrderbookDeltaMessage
-	batchTimer          *time.Timer
-	batchInterval       time.Duration
+	batchMutex    sync.Mutex
+	pendingDeltas []*OrderbookDeltaMessage
+	batchTimer    *time.Timer
+	batchInterval time.Duration
 
 	// Snapshot provider for initial data
 	snapshotProvider *SnapshotProvider
@@ -66,8 +66,8 @@ func NewHub() *Hub {
 		broadcastOrder:          make(chan *OrderMessage, 256),
 		pendingDeltas:           make([]*OrderbookDeltaMessage, 0, 100),
 		batchInterval:           100 * time.Millisecond, // Batch orderbook updates every 100ms
-		idleCheckInterval:       30 * time.Second,        // Check for idle clients every 30s
-		idleTimeout:             5 * time.Minute,         // Disconnect clients idle for 5+ minutes
+		idleCheckInterval:       30 * time.Second,       // Check for idle clients every 30s
+		idleTimeout:             5 * time.Minute,        // Disconnect clients idle for 5+ minutes
 		lastActivity:            make(map[*Client]time.Time),
 	}
 }
@@ -75,21 +75,21 @@ func NewHub() *Hub {
 // Run starts the hub's main event loop
 func (h *Hub) Run() {
 	log.Println("WebSocket Hub started")
-	
+
 	// Start idle client cleanup goroutine
 	go h.cleanupIdleClients()
-	
+
 	for {
 		select {
 		case client := <-h.register:
 			h.mu.Lock()
 			h.clients[client] = true
 			h.mu.Unlock()
-			
+
 			h.activityMutex.Lock()
 			h.lastActivity[client] = time.Now()
 			h.activityMutex.Unlock()
-			
+
 			log.Printf("Client registered: %s (total clients: %d)", client.id, len(h.clients))
 
 		case client := <-h.unregister:
@@ -104,7 +104,7 @@ func (h *Hub) Run() {
 				log.Printf("Client unregistered: %s (total clients: %d)", client.id, len(h.clients))
 			}
 			h.mu.Unlock()
-			
+
 			h.activityMutex.Lock()
 			delete(h.lastActivity, client)
 			h.activityMutex.Unlock()
@@ -113,7 +113,7 @@ func (h *Hub) Run() {
 			// Batch orderbook deltas to reduce message frequency
 			h.batchMutex.Lock()
 			h.pendingDeltas = append(h.pendingDeltas, delta)
-			
+
 			// Start or reset batch timer
 			if h.batchTimer == nil {
 				h.batchTimer = time.AfterFunc(h.batchInterval, func() {
@@ -215,8 +215,8 @@ func (h *Hub) Subscribe(client *Client, topic Topic) {
 		h.subscriptions[topic] = make(map[*Client]bool)
 	}
 	h.subscriptions[topic][client] = true
-	
-	log.Printf("Client %s subscribed to %s (subscribers: %d)", 
+
+	log.Printf("Client %s subscribed to %s (subscribers: %d)",
 		client.id, topic, len(h.subscriptions[topic]))
 }
 
@@ -227,7 +227,7 @@ func (h *Hub) Unsubscribe(client *Client, topic Topic) {
 
 	if subscribers, exists := h.subscriptions[topic]; exists {
 		delete(subscribers, client)
-		log.Printf("Client %s unsubscribed from %s (subscribers: %d)", 
+		log.Printf("Client %s unsubscribed from %s (subscribers: %d)",
 			client.id, topic, len(subscribers))
 	}
 }
@@ -250,9 +250,9 @@ func (h *Hub) BroadcastOrderbookDelta(instrument string, side string, price, siz
 }
 
 // BroadcastTrade sends a trade notification to subscribed clients
-func (h *Hub) BroadcastTrade(tradeID string, instrument string, buyOrderID, sellOrderID string, 
+func (h *Hub) BroadcastTrade(tradeID string, instrument string, buyOrderID, sellOrderID string,
 	price, quantity decimal.Decimal, timestamp int64) {
-	
+
 	trade := &TradeMessage{
 		TradeID:     tradeID,
 		Instrument:  instrument,
@@ -273,7 +273,7 @@ func (h *Hub) BroadcastTrade(tradeID string, instrument string, buyOrderID, sell
 // BroadcastOrder sends an order update to subscribed clients
 func (h *Hub) BroadcastOrder(orderID, clientID, instrument, side, orderType, status string,
 	price, quantity, filledQuantity, remainingQuantity decimal.Decimal, timestamp int64) {
-	
+
 	order := &OrderMessage{
 		OrderID:           orderID,
 		ClientID:          clientID,
@@ -363,7 +363,7 @@ func (h *Hub) cleanupIdleClients() {
 		// Disconnect idle clients
 		for _, client := range idleClients {
 			log.Printf("Disconnecting idle client: %s (idle for %v)", client.id, h.idleTimeout)
-			client.conn.Close() // This will trigger unregister in readPump
+			_ = client.conn.Close() // This will trigger unregister in readPump
 		}
 
 		if len(idleClients) > 0 {

@@ -125,7 +125,7 @@ func (sm *SnapshotManager) snapshotLoop() {
 		select {
 		case <-sm.stopCh:
 			// Take final snapshot before shutdown
-			sm.TakeSnapshot(SnapshotTypePreShutdown, "system_shutdown")
+			_ = sm.TakeSnapshot(SnapshotTypePreShutdown, "system_shutdown")
 			return
 
 		case <-ticker.C:
@@ -222,7 +222,6 @@ func (sm *SnapshotManager) saveSnapshot(ctx context.Context, snapshot *Orderbook
 
 	uncompressedSize := len(snapshotJSON)
 	finalData := snapshotJSON
-	compressionRatio := 1.0
 
 	// Apply compression if enabled and data is large enough
 	sm.mu.RLock()
@@ -236,15 +235,16 @@ func (sm *SnapshotManager) saveSnapshot(ctx context.Context, snapshot *Orderbook
 		if err != nil {
 			log.Printf(" Compression failed, using uncompressed data: %v", err)
 		} else {
-			gzipWriter.Close()
-			finalData = buf.Bytes()
-			compressionRatio = float64(len(finalData)) / float64(uncompressedSize)
+			_ = gzipWriter.Close()
+			compressedData := buf.Bytes()
+			compressionRatio := float64(len(compressedData)) / float64(uncompressedSize)
 
 			// Only use compressed if it actually saves space
 			if compressionRatio >= 0.9 {
-				finalData = snapshotJSON // Compression not effective
+				// finalData already set to snapshotJSON above
 				log.Printf(">Compression ratio %.2f%% - using uncompressed", compressionRatio*100)
 			} else {
+				finalData = compressedData
 				log.Printf(">Snapshot compressed: %d → %d bytes (%.1f%% reduction)",
 					uncompressedSize, len(finalData), (1-compressionRatio)*100)
 			}
@@ -305,6 +305,85 @@ func (sm *SnapshotManager) saveSnapshot(ctx context.Context, snapshot *Orderbook
 	return nil
 }
 
+// parsePriceLevels is a helper to parse bid or ask levels from snapshot data
+func parsePriceLevels(snapshotData map[string]interface{}, key string) []SnapshotPriceLevel {
+	levels := make([]SnapshotPriceLevel, 0)
+	if levelData, ok := snapshotData[key].([]interface{}); ok {
+		for _, item := range levelData {
+			if levelMap, ok := item.(map[string]interface{}); ok {
+				level := SnapshotPriceLevel{}
+				if price, ok := levelMap["price"].(string); ok {
+					level.Price, _ = decimal.NewFromString(price)
+				}
+				if volume, ok := levelMap["total_volume"].(string); ok {
+					level.TotalVolume, _ = decimal.NewFromString(volume)
+				}
+				if count, ok := levelMap["order_count"].(float64); ok {
+					level.OrderCount = int(count)
+				}
+				levels = append(levels, level)
+			}
+		}
+	}
+	return levels
+}
+
+// comparePriceLevels is a helper to compare snapshot and live price levels
+func comparePriceLevels(snapshotLevels, liveLevels []SnapshotPriceLevel, levelType string) []SnapshotMismatch {
+	var mismatches []SnapshotMismatch
+
+	minLevels := len(snapshotLevels)
+	if len(liveLevels) < minLevels {
+		minLevels = len(liveLevels)
+	}
+
+	for i := 0; i < minLevels; i++ {
+		snapLevel := snapshotLevels[i]
+		liveLevel := liveLevels[i]
+
+		// Compare price
+		if !snapLevel.Price.Equal(liveLevel.Price) {
+			mismatches = append(mismatches, SnapshotMismatch{
+				Level:       fmt.Sprintf("%s[%d]", levelType, i),
+				Field:       "price",
+				SnapshotVal: snapLevel.Price.String(),
+				LiveVal:     liveLevel.Price.String(),
+				Difference:  liveLevel.Price.Sub(snapLevel.Price),
+			})
+			log.Printf("%s[%d] price mismatch: snapshot=%s, live=%s",
+				levelType, i, snapLevel.Price, liveLevel.Price)
+		}
+
+		// Compare volume
+		if !snapLevel.TotalVolume.Equal(liveLevel.TotalVolume) {
+			mismatches = append(mismatches, SnapshotMismatch{
+				Level:       fmt.Sprintf("%s[%d]", levelType, i),
+				Field:       "volume",
+				SnapshotVal: snapLevel.TotalVolume.String(),
+				LiveVal:     liveLevel.TotalVolume.String(),
+				Difference:  liveLevel.TotalVolume.Sub(snapLevel.TotalVolume),
+			})
+			log.Printf("%s[%d] volume mismatch: snapshot=%s, live=%s (diff: %s)",
+				levelType, i, snapLevel.TotalVolume, liveLevel.TotalVolume,
+				liveLevel.TotalVolume.Sub(snapLevel.TotalVolume))
+		}
+
+		// Compare order count
+		if snapLevel.OrderCount != liveLevel.OrderCount {
+			mismatches = append(mismatches, SnapshotMismatch{
+				Level:       fmt.Sprintf("%s[%d]", levelType, i),
+				Field:       "order_count",
+				SnapshotVal: snapLevel.OrderCount,
+				LiveVal:     liveLevel.OrderCount,
+			})
+			log.Printf("%s[%d] order count mismatch: snapshot=%d, live=%d",
+				levelType, i, snapLevel.OrderCount, liveLevel.OrderCount)
+		}
+	}
+
+	return mismatches
+}
+
 // GetLatestSnapshot retrieves the most recent snapshot
 func (sm *SnapshotManager) GetLatestSnapshot(ctx context.Context) (*OrderbookSnapshot, error) {
 	query := `SELECT * FROM get_latest_snapshot($1)`
@@ -348,45 +427,9 @@ func (sm *SnapshotManager) GetLatestSnapshot(ctx context.Context) (*OrderbookSna
 		return nil, fmt.Errorf("failed to unmarshal snapshot data: %w", err)
 	}
 
-	// Parse bid levels
-	if bids, ok := snapshotData["bid_levels"].([]interface{}); ok {
-		snapshot.BidLevels = make([]SnapshotPriceLevel, 0, len(bids))
-		for _, b := range bids {
-			if bidMap, ok := b.(map[string]interface{}); ok {
-				level := SnapshotPriceLevel{}
-				if price, ok := bidMap["price"].(string); ok {
-					level.Price, _ = decimal.NewFromString(price)
-				}
-				if volume, ok := bidMap["total_volume"].(string); ok {
-					level.TotalVolume, _ = decimal.NewFromString(volume)
-				}
-				if count, ok := bidMap["order_count"].(float64); ok {
-					level.OrderCount = int(count)
-				}
-				snapshot.BidLevels = append(snapshot.BidLevels, level)
-			}
-		}
-	}
-
-	// Parse ask levels
-	if asks, ok := snapshotData["ask_levels"].([]interface{}); ok {
-		snapshot.AskLevels = make([]SnapshotPriceLevel, 0, len(asks))
-		for _, a := range asks {
-			if askMap, ok := a.(map[string]interface{}); ok {
-				level := SnapshotPriceLevel{}
-				if price, ok := askMap["price"].(string); ok {
-					level.Price, _ = decimal.NewFromString(price)
-				}
-				if volume, ok := askMap["total_volume"].(string); ok {
-					level.TotalVolume, _ = decimal.NewFromString(volume)
-				}
-				if count, ok := askMap["order_count"].(float64); ok {
-					level.OrderCount = int(count)
-				}
-				snapshot.AskLevels = append(snapshot.AskLevels, level)
-			}
-		}
-	}
+	// Parse bid and ask levels using helper
+	snapshot.BidLevels = parsePriceLevels(snapshotData, "bid_levels")
+	snapshot.AskLevels = parsePriceLevels(snapshotData, "ask_levels")
 
 	// Parse optional fields
 	if bestBidStr.Valid {
@@ -481,47 +524,14 @@ func (sm *SnapshotManager) getSnapshotByID(ctx context.Context, snapshotID int64
 	snapshot.TotalBidVolume, _ = decimal.NewFromString(totalBidStr)
 	snapshot.TotalAskVolume, _ = decimal.NewFromString(totalAskStr)
 
-	// Deserialize levels (same logic as GetLatestSnapshot)
+	// Deserialize levels using helper
 	var snapshotData map[string]interface{}
-	json.Unmarshal(snapshotDataJSON, &snapshotData)
-
-	if bids, ok := snapshotData["bid_levels"].([]interface{}); ok {
-		snapshot.BidLevels = make([]SnapshotPriceLevel, 0, len(bids))
-		for _, b := range bids {
-			if bidMap, ok := b.(map[string]interface{}); ok {
-				level := SnapshotPriceLevel{}
-				if price, ok := bidMap["price"].(string); ok {
-					level.Price, _ = decimal.NewFromString(price)
-				}
-				if volume, ok := bidMap["total_volume"].(string); ok {
-					level.TotalVolume, _ = decimal.NewFromString(volume)
-				}
-				if count, ok := bidMap["order_count"].(float64); ok {
-					level.OrderCount = int(count)
-				}
-				snapshot.BidLevels = append(snapshot.BidLevels, level)
-			}
-		}
+	if err := json.Unmarshal(snapshotDataJSON, &snapshotData); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal snapshot data: %w", err)
 	}
 
-	if asks, ok := snapshotData["ask_levels"].([]interface{}); ok {
-		snapshot.AskLevels = make([]SnapshotPriceLevel, 0, len(asks))
-		for _, a := range asks {
-			if askMap, ok := a.(map[string]interface{}); ok {
-				level := SnapshotPriceLevel{}
-				if price, ok := askMap["price"].(string); ok {
-					level.Price, _ = decimal.NewFromString(price)
-				}
-				if volume, ok := askMap["total_volume"].(string); ok {
-					level.TotalVolume, _ = decimal.NewFromString(volume)
-				}
-				if count, ok := askMap["order_count"].(float64); ok {
-					level.OrderCount = int(count)
-				}
-				snapshot.AskLevels = append(snapshot.AskLevels, level)
-			}
-		}
-	}
+	snapshot.BidLevels = parsePriceLevels(snapshotData, "bid_levels")
+	snapshot.AskLevels = parsePriceLevels(snapshotData, "ask_levels")
 
 	return &snapshot, nil
 }
@@ -583,105 +593,9 @@ func (sm *SnapshotManager) ValidateAgainstLiveBook(ctx context.Context, snapshot
 			len(snapshot.AskLevels), len(liveSnapshot.AskLevels))
 	}
 
-	// Compare bid levels (check up to min of both lengths)
-	minBidLevels := len(snapshot.BidLevels)
-	if len(liveSnapshot.BidLevels) < minBidLevels {
-		minBidLevels = len(liveSnapshot.BidLevels)
-	}
-
-	for i := 0; i < minBidLevels; i++ {
-		snapLevel := snapshot.BidLevels[i]
-		liveLevel := liveSnapshot.BidLevels[i]
-
-		// Compare price
-		if !snapLevel.Price.Equal(liveLevel.Price) {
-			mismatches = append(mismatches, SnapshotMismatch{
-				Level:       fmt.Sprintf("bid[%d]", i),
-				Field:       "price",
-				SnapshotVal: snapLevel.Price.String(),
-				LiveVal:     liveLevel.Price.String(),
-				Difference:  liveLevel.Price.Sub(snapLevel.Price),
-			})
-			log.Printf("Bid[%d] price mismatch: snapshot=%s, live=%s",
-				i, snapLevel.Price, liveLevel.Price)
-		}
-
-		// Compare volume
-		if !snapLevel.TotalVolume.Equal(liveLevel.TotalVolume) {
-			mismatches = append(mismatches, SnapshotMismatch{
-				Level:       fmt.Sprintf("bid[%d]", i),
-				Field:       "volume",
-				SnapshotVal: snapLevel.TotalVolume.String(),
-				LiveVal:     liveLevel.TotalVolume.String(),
-				Difference:  liveLevel.TotalVolume.Sub(snapLevel.TotalVolume),
-			})
-			log.Printf("Bid[%d] volume mismatch: snapshot=%s, live=%s (diff: %s)",
-				i, snapLevel.TotalVolume, liveLevel.TotalVolume,
-				liveLevel.TotalVolume.Sub(snapLevel.TotalVolume))
-		}
-
-		// Compare order count
-		if snapLevel.OrderCount != liveLevel.OrderCount {
-			mismatches = append(mismatches, SnapshotMismatch{
-				Level:       fmt.Sprintf("bid[%d]", i),
-				Field:       "order_count",
-				SnapshotVal: snapLevel.OrderCount,
-				LiveVal:     liveLevel.OrderCount,
-			})
-			log.Printf("Bid[%d] order count mismatch: snapshot=%d, live=%d",
-				i, snapLevel.OrderCount, liveLevel.OrderCount)
-		}
-	}
-
-	// Compare ask levels
-	minAskLevels := len(snapshot.AskLevels)
-	if len(liveSnapshot.AskLevels) < minAskLevels {
-		minAskLevels = len(liveSnapshot.AskLevels)
-	}
-
-	for i := 0; i < minAskLevels; i++ {
-		snapLevel := snapshot.AskLevels[i]
-		liveLevel := liveSnapshot.AskLevels[i]
-
-		// Compare price
-		if !snapLevel.Price.Equal(liveLevel.Price) {
-			mismatches = append(mismatches, SnapshotMismatch{
-				Level:       fmt.Sprintf("ask[%d]", i),
-				Field:       "price",
-				SnapshotVal: snapLevel.Price.String(),
-				LiveVal:     liveLevel.Price.String(),
-				Difference:  liveLevel.Price.Sub(snapLevel.Price),
-			})
-			log.Printf("Ask[%d] price mismatch: snapshot=%s, live=%s",
-				i, snapLevel.Price, liveLevel.Price)
-		}
-
-		// Compare volume
-		if !snapLevel.TotalVolume.Equal(liveLevel.TotalVolume) {
-			mismatches = append(mismatches, SnapshotMismatch{
-				Level:       fmt.Sprintf("ask[%d]", i),
-				Field:       "volume",
-				SnapshotVal: snapLevel.TotalVolume.String(),
-				LiveVal:     liveLevel.TotalVolume.String(),
-				Difference:  liveLevel.TotalVolume.Sub(snapLevel.TotalVolume),
-			})
-			log.Printf("Ask[%d] volume mismatch: snapshot=%s, live=%s (diff: %s)",
-				i, snapLevel.TotalVolume, liveLevel.TotalVolume,
-				liveLevel.TotalVolume.Sub(snapLevel.TotalVolume))
-		}
-
-		// Compare order count
-		if snapLevel.OrderCount != liveLevel.OrderCount {
-			mismatches = append(mismatches, SnapshotMismatch{
-				Level:       fmt.Sprintf("ask[%d]", i),
-				Field:       "order_count",
-				SnapshotVal: snapLevel.OrderCount,
-				LiveVal:     liveLevel.OrderCount,
-			})
-			log.Printf("Ask[%d] order count mismatch: snapshot=%d, live=%d",
-				i, snapLevel.OrderCount, liveLevel.OrderCount)
-		}
-	}
+	// Compare bid and ask levels using helper
+	mismatches = append(mismatches, comparePriceLevels(snapshot.BidLevels, liveSnapshot.BidLevels, "bid")...)
+	mismatches = append(mismatches, comparePriceLevels(snapshot.AskLevels, liveSnapshot.AskLevels, "ask")...)
 
 	// Compare total volumes
 	if !snapshot.TotalBidVolume.Equal(liveSnapshot.TotalBidVolume) {

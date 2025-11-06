@@ -6,7 +6,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/yourusername/trading-engine/engine"
+	"github.com/SahithiKokkula/backend-2-cent-ventures/engine"
 )
 
 // RecoveryHandler handles recovery-related HTTP requests
@@ -120,7 +120,7 @@ func (h *RecoveryHandler) HandleRecoveryStatus(w http.ResponseWriter, r *http.Re
 func (h *RecoveryHandler) respondJSON(w http.ResponseWriter, statusCode int, response RecoveryResponse) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // RegisterRoutes registers recovery routes with a mux

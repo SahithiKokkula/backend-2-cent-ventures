@@ -127,10 +127,10 @@ func TestSecureHeadersMiddleware(t *testing.T) {
 
 	// Check security headers
 	expectedHeaders := map[string]string{
-		"X-Content-Type-Options":   "nosniff",
-		"X-Frame-Options":          "DENY",
-		"X-XSS-Protection":         "1; mode=block",
-		"Content-Security-Policy":  "default-src 'self'",
+		"X-Content-Type-Options":    "nosniff",
+		"X-Frame-Options":           "DENY",
+		"X-XSS-Protection":          "1; mode=block",
+		"Content-Security-Policy":   "default-src 'self'",
 		"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
 	}
 
@@ -226,7 +226,7 @@ func TestValidateOrderRequestMiddleware(t *testing.T) {
 			handler.ServeHTTP(rr, req)
 
 			if rr.Code != tt.expectedStatus {
-				t.Errorf("Expected status %d, got %d, body: %s", 
+				t.Errorf("Expected status %d, got %d, body: %s",
 					tt.expectedStatus, rr.Code, rr.Body.String())
 			}
 		})
@@ -253,7 +253,7 @@ func TestMiddlewareChain(t *testing.T) {
 	// Test with valid request
 	req := httptest.NewRequest("POST", "/test", bytes.NewBufferString("test"))
 	req.Header.Set("Content-Type", "application/json")
-	
+
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 

@@ -6,8 +6,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/yourusername/trading-engine/engine"
-	"github.com/yourusername/trading-engine/persistence"
+	"github.com/SahithiKokkula/backend-2-cent-ventures/engine"
+	"github.com/SahithiKokkula/backend-2-cent-ventures/persistence"
 )
 
 type SnapshotProvider struct {

@@ -9,18 +9,21 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/SahithiKokkula/backend-2-cent-ventures/engine"
+	"github.com/SahithiKokkula/backend-2-cent-ventures/logging"
+	"github.com/SahithiKokkula/backend-2-cent-ventures/persistence"
+	"github.com/SahithiKokkula/backend-2-cent-ventures/ratelimit"
+	"github.com/SahithiKokkula/backend-2-cent-ventures/websocket"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	gorilla_ws "github.com/gorilla/websocket"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
-	"github.com/yourusername/trading-engine/engine"
-	"github.com/yourusername/trading-engine/logging"
-	"github.com/yourusername/trading-engine/persistence"
-	"github.com/yourusername/trading-engine/ratelimit"
-	"github.com/yourusername/trading-engine/websocket"
 )
+
+// contextKey is a custom type for context keys to avoid collisions
+type contextKey string
 
 // Router holds the HTTP router and all handlers
 type Router struct {
@@ -156,7 +159,7 @@ func (r *Router) CancelOrder(w http.ResponseWriter, req *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"order":   resp.Order,
 	})
@@ -180,7 +183,7 @@ func (r *Router) GetOrder(w http.ResponseWriter, req *http.Request) {
 		if err == nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Data-Source", "database")
-			json.NewEncoder(w).Encode(order)
+			_ = json.NewEncoder(w).Encode(order)
 			return
 		}
 	}
@@ -193,7 +196,7 @@ func (r *Router) GetOrder(w http.ResponseWriter, req *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Data-Source", "in-memory")
-	json.NewEncoder(w).Encode(order)
+	_ = json.NewEncoder(w).Encode(order)
 }
 
 // OrderBookLevel represents a price level in the orderbook response
@@ -335,7 +338,7 @@ func (r *Router) GetOrderBook(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("X-Data-Source", "in-memory")
 	w.Header().Set("X-Response-Time-Ms", strconv.FormatFloat(response.ResponseTimeMs, 'f', 3, 64))
 
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // GetTrades handles GET /trades?limit=50&instrument=BTC-USD&offset=0
@@ -401,7 +404,7 @@ func (r *Router) GetTrades(w http.ResponseWriter, req *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Data-Source", "database")
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // getTradesWithPagination retrieves trades with stable sorting for consistent pagination
@@ -428,7 +431,7 @@ func (r *Router) getTradesWithPagination(ctx context.Context, instrument string,
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var trades []map[string]interface{}
 	for rows.Next() {
@@ -478,7 +481,7 @@ func (r *Router) getTradesWithPagination(ctx context.Context, instrument string,
 // HealthCheck handles GET /healthz
 func (r *Router) HealthCheck(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status": "healthy",
 	})
 }
@@ -589,7 +592,7 @@ func correlationIDMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Correlation-ID", correlationID)
 
 		// Add correlation ID to request context
-		ctx := context.WithValue(r.Context(), "correlation_id", correlationID)
+		ctx := context.WithValue(r.Context(), contextKey("correlation_id"), correlationID)
 
 		// Call next handler with updated context
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -598,7 +601,7 @@ func correlationIDMiddleware(next http.Handler) http.Handler {
 
 // GetCorrelationID extracts correlation ID from request context
 func GetCorrelationID(r *http.Request) string {
-	if correlationID, ok := r.Context().Value("correlation_id").(string); ok {
+	if correlationID, ok := r.Context().Value(contextKey("correlation_id")).(string); ok {
 		return correlationID
 	}
 	return ""

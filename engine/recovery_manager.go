@@ -7,9 +7,9 @@ import (
 	"log"
 	"time"
 
+	"github.com/SahithiKokkula/backend-2-cent-ventures/models"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
-	"github.com/yourusername/trading-engine/models"
 )
 
 type RecoveryManager struct {
@@ -215,7 +215,9 @@ func (rm *RecoveryManager) loadOpenOrders(ctx context.Context, sinceTimestamp ti
 	if err != nil {
 		return nil, fmt.Errorf("failed to query orders: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close() // Ignore error on defer close
+	}()
 
 	orders := make([]*models.Order, 0)
 
@@ -349,9 +351,50 @@ func (rm *RecoveryManager) capturePostRecoveryState(orderbook *OrderBook, report
 	}
 }
 
-// validateRecovery performs validation checks on recovered orderbook
-func (rm *RecoveryManager) validateRecovery(ctx context.Context, orderbook *OrderBook, report *RecoveryReport) {
-	rm.validateRecoveryWithDiffs(ctx, orderbook, report, false)
+// Removed unused validateRecovery function - use validateRecoveryWithDiffs directly
+
+// validateVolumeWithTolerance is a helper to validate bid/ask volume against database
+func validateVolumeWithTolerance(report *RecoveryReport, volumeType string, recoveredVol, dbVol decimal.Decimal, verbose bool) {
+	diff := recoveredVol.Sub(dbVol)
+	tolerance := decimal.NewFromFloat(0.00000001) // Allow tiny floating point differences
+
+	// Capitalize volume type for display
+	displayType := volumeType
+	if len(volumeType) > 0 {
+		displayType = string(volumeType[0]-32) + volumeType[1:] // Simple uppercase first char
+	}
+
+	if diff.Abs().GreaterThan(tolerance) {
+		err := fmt.Sprintf("%s volume mismatch: orderbook=%s, database=%s, diff=%s",
+			displayType, recoveredVol, dbVol, diff)
+		report.ValidationErrors = append(report.ValidationErrors, err)
+		report.ValidationPassed = false
+		log.Printf("Validation error: %s", err)
+
+		diffPercent := decimal.Zero
+		if !dbVol.IsZero() {
+			diffPercent = diff.Div(dbVol).Mul(decimal.NewFromInt(100))
+		}
+
+		report.Diffs = append(report.Diffs, RecoveryDiff{
+			Field:          volumeType + "_volume",
+			RecoveredValue: recoveredVol.String(),
+			ExpectedValue:  dbVol.String(),
+			Difference:     fmt.Sprintf("%s (%.2f%%)", diff.String(), diffPercent.InexactFloat64()),
+			Severity:       "error",
+			Description:    fmt.Sprintf("Recovered %s volume does not match database total", volumeType),
+		})
+	} else if verbose && !diff.IsZero() {
+		// Info-level diff for small differences
+		report.Diffs = append(report.Diffs, RecoveryDiff{
+			Field:          volumeType + "_volume",
+			RecoveredValue: recoveredVol.String(),
+			ExpectedValue:  dbVol.String(),
+			Difference:     diff.String(),
+			Severity:       "info",
+			Description:    fmt.Sprintf("Tiny %s volume difference within tolerance", volumeType),
+		})
+	}
 }
 
 // validateRecoveryWithDiffs performs validation and generates diagnostic diffs
@@ -428,87 +471,20 @@ func (rm *RecoveryManager) validateRecoveryWithDiffs(ctx context.Context, orderb
 		report.DatabaseBidCount = dbTotals.OpenBuyOrderCount
 		report.DatabaseAskCount = dbTotals.OpenSellOrderCount
 
-		bidDiff := report.AfterTotalBidVolume.Sub(dbTotals.TotalBidVolume)
-		askDiff := report.AfterTotalAskVolume.Sub(dbTotals.TotalAskVolume)
-
-		tolerance := decimal.NewFromFloat(0.00000001) // Allow tiny floating point differences
-
-		// Check bid volume diff
-		if bidDiff.Abs().GreaterThan(tolerance) {
-			err := fmt.Sprintf("Bid volume mismatch: orderbook=%s, database=%s, diff=%s",
-				report.AfterTotalBidVolume, dbTotals.TotalBidVolume, bidDiff)
-			report.ValidationErrors = append(report.ValidationErrors, err)
-			report.ValidationPassed = false
-			log.Printf("Validation error: %s", err)
-
-			diffPercent := decimal.Zero
-			if !dbTotals.TotalBidVolume.IsZero() {
-				diffPercent = bidDiff.Div(dbTotals.TotalBidVolume).Mul(decimal.NewFromInt(100))
-			}
-
-			report.Diffs = append(report.Diffs, RecoveryDiff{
-				Field:          "bid_volume",
-				RecoveredValue: report.AfterTotalBidVolume.String(),
-				ExpectedValue:  dbTotals.TotalBidVolume.String(),
-				Difference:     fmt.Sprintf("%s (%.2f%%)", bidDiff.String(), diffPercent.InexactFloat64()),
-				Severity:       "error",
-				Description:    "Recovered bid volume does not match database total",
-			})
-		} else if verbose && !bidDiff.IsZero() {
-			// Info-level diff for small differences
-			report.Diffs = append(report.Diffs, RecoveryDiff{
-				Field:          "bid_volume",
-				RecoveredValue: report.AfterTotalBidVolume.String(),
-				ExpectedValue:  dbTotals.TotalBidVolume.String(),
-				Difference:     bidDiff.String(),
-				Severity:       "info",
-				Description:    "Tiny bid volume difference within tolerance",
-			})
-		}
-
-		// Check ask volume diff
-		if askDiff.Abs().GreaterThan(tolerance) {
-			err := fmt.Sprintf("Ask volume mismatch: orderbook=%s, database=%s, diff=%s",
-				report.AfterTotalAskVolume, dbTotals.TotalAskVolume, askDiff)
-			report.ValidationErrors = append(report.ValidationErrors, err)
-			report.ValidationPassed = false
-			log.Printf("Validation error: %s", err)
-
-			diffPercent := decimal.Zero
-			if !dbTotals.TotalAskVolume.IsZero() {
-				diffPercent = askDiff.Div(dbTotals.TotalAskVolume).Mul(decimal.NewFromInt(100))
-			}
-
-			report.Diffs = append(report.Diffs, RecoveryDiff{
-				Field:          "ask_volume",
-				RecoveredValue: report.AfterTotalAskVolume.String(),
-				ExpectedValue:  dbTotals.TotalAskVolume.String(),
-				Difference:     fmt.Sprintf("%s (%.2f%%)", askDiff.String(), diffPercent.InexactFloat64()),
-				Severity:       "error",
-				Description:    "Recovered ask volume does not match database total",
-			})
-		} else if verbose && !askDiff.IsZero() {
-			// Info-level diff for small differences
-			report.Diffs = append(report.Diffs, RecoveryDiff{
-				Field:          "ask_volume",
-				RecoveredValue: report.AfterTotalAskVolume.String(),
-				ExpectedValue:  dbTotals.TotalAskVolume.String(),
-				Difference:     askDiff.String(),
-				Severity:       "info",
-				Description:    "Tiny ask volume difference within tolerance",
-			})
-		}
+		// Validate bid and ask volumes using helper
+		validateVolumeWithTolerance(report, "bid", report.AfterTotalBidVolume, dbTotals.TotalBidVolume, verbose)
+		validateVolumeWithTolerance(report, "ask", report.AfterTotalAskVolume, dbTotals.TotalAskVolume, verbose)
 
 		// Check order counts
 		if verbose {
 			if dbTotals.OpenBuyOrderCount > 0 {
 				report.Diffs = append(report.Diffs, RecoveryDiff{
-					Field:          "bid_order_count",
-					RecoveredValue: fmt.Sprintf("%d", report.AfterBidLevels),
-					ExpectedValue:  fmt.Sprintf("%d orders", dbTotals.OpenBuyOrderCount),
+					Field:          "ask_order_count",
+					RecoveredValue: fmt.Sprintf("%d", report.AfterAskLevels),
+					ExpectedValue:  fmt.Sprintf("%d orders", dbTotals.OpenSellOrderCount),
 					Difference:     "N/A",
 					Severity:       "info",
-					Description:    fmt.Sprintf("Orderbook levels vs database orders (levels may aggregate multiple orders)"),
+					Description:    "Orderbook levels vs database orders (levels may aggregate multiple orders)",
 				})
 			}
 
@@ -519,7 +495,7 @@ func (rm *RecoveryManager) validateRecoveryWithDiffs(ctx context.Context, orderb
 					ExpectedValue:  fmt.Sprintf("%d orders", dbTotals.OpenSellOrderCount),
 					Difference:     "N/A",
 					Severity:       "info",
-					Description:    fmt.Sprintf("Orderbook levels vs database orders (levels may aggregate multiple orders)"),
+					Description:    "Orderbook levels vs database orders (levels may aggregate multiple orders)",
 				})
 			}
 		}
