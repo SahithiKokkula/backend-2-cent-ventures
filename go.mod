@@ -1,4 +1,4 @@
-module github.com/yourusername/trading-engine
+module github.com/SahithiKokkula/backend-2-cent-ventures
 
 go 1.23.0
 
